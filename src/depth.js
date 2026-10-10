@@ -2,6 +2,8 @@
 // loaded only when depth mode is used. The model outputs relative inverse
 // depth (disparity): larger values are closer to the camera.
 import { model, imageTensor } from './ort.js';
+import { resizeBilinear, dilate } from './mask.js';
+import { inpaint } from './inpaint.js';
 
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
@@ -71,4 +73,44 @@ export function depthProfile(depth, matte, mw, mh, rest, radius) {
     profile[v] = valid[v] ? Math.min(1, Math.max(0, (near - values[v]) / range)) : 1;
   }
   return profile;
+}
+
+// Inferno colour map stops (matplotlib), dark = far, bright = near.
+const INFERNO = [
+  [0, 0, 4], [27, 12, 65], [74, 12, 107], [120, 28, 109], [165, 44, 96],
+  [207, 68, 70], [237, 105, 37], [251, 155, 6], [252, 255, 164],
+];
+export const INFERNO_CSS = `linear-gradient(to right, ${INFERNO.map((c) => `rgb(${c})`).join(', ')})`;
+
+function inferno(t, out, o) {
+  const x = Math.min(Math.max(t, 0), 1) * (INFERNO.length - 1);
+  const i = Math.min(Math.floor(x), INFERNO.length - 2);
+  const f = x - i;
+  for (let c = 0; c < 3; c++) out[o + c] = INFERNO[i][c] + (INFERNO[i + 1][c] - INFERNO[i][c]) * f;
+}
+
+/**
+ * Colour-mapped depth images for display, at full resolution: the background
+ * (with the subject's hole filled in, like the photo's) and the subject
+ * (alpha = matte) for the jelly.
+ * @returns {{ bg: ImageData, fg: ImageData }}
+ */
+export function depthImages(depth, matte, hole, w, h) {
+  const sorted = Float32Array.from(depth.map).sort();
+  const lo = sorted[Math.floor((sorted.length - 1) * 0.01)];
+  const hi = sorted[Math.floor((sorted.length - 1) * 0.99)];
+  const range = hi - lo || 1;
+
+  const up = resizeBilinear(depth.map, depth.w, depth.h, w, h);
+  const fg = new ImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    inferno((up[i] - lo) / range, fg.data, i * 4);
+    fg.data[i * 4 + 3] = 255;
+  }
+  // The depth map is low-res, so the subject's depth bleeds a little past its
+  // outline: grow the hole by about two depth pixels before filling.
+  const grown = dilate(hole, w, h, Math.ceil((2 * w) / depth.w));
+  const bg = new ImageData(inpaint(fg.data, grown, w, h), w, h);
+  for (let i = 0; i < w * h; i++) fg.data[i * 4 + 3] = matte[i] * 255;
+  return { bg, fg };
 }

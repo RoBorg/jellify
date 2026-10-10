@@ -32,6 +32,10 @@
         <span class="spinner" aria-hidden="true"></span><span id="status-text"></span>
       </div>
 
+      <div id="depth-legend" class="legend" hidden aria-label="Depth map colours: dark is far, bright is near">
+        <span>Far</span><span class="legend-bar"></span><span>Near</span>
+      </div>
+
       <p id="hint" class="hint" hidden>Drag it, shake the window, or shake your phone</p>
 
       <form id="settings" class="settings" hidden>
@@ -39,6 +43,7 @@
           <legend>Wobbliest part</legend>
           <label class="check"><input name="mode" type="radio" value="height" checked /> Top of the subject</label>
           <label class="check"><input name="mode" type="radio" value="depth" /> Nearest the camera <span class="note">(27&nbsp;MB depth model)</span></label>
+          <label class="check sub"><input name="showDepth" type="checkbox" disabled /> Show depth map</label>
         </fieldset>
         <label>Wobbliness <input name="wobble" type="range" min="0" max="1" step="0.01" value="0.4" /></label>
         <label>Damping <input name="damping" type="range" min="0" max="1" step="0.01" value="0.35" /></label>

@@ -51,6 +51,8 @@ export class Renderer {
     this.bg = null;
     this.jelly = null;
     this.showJelly = true;
+    this.depthView = null; // { bg, fg } alternate textures showing the depth map
+    this.showDepth = false;
     this.fit = { scale: 1, x: 0, y: 0 };
   }
 
@@ -83,6 +85,19 @@ export class Renderer {
     this.jelly = this.makeVao(mesh.rest, uv, new Float32Array(mesh.rest.length / 2), mesh.tris);
     this.jelly.count = mesh.tris.length;
     this.jelly.tex = texture(gl, source, true);
+  }
+
+  /**
+   * Alternate textures that colour the scene by depth: `bg` for the whole
+   * frame, `fg` (with the subject's alpha) for the jelly. null clears them.
+   */
+  setDepthView(bg, fg) {
+    const gl = this.gl;
+    if (this.depthView) {
+      gl.deleteTexture(this.depthView.bg);
+      gl.deleteTexture(this.depthView.fg);
+    }
+    this.depthView = bg ? { bg: texture(gl, bg, false), fg: texture(gl, fg, true) } : null;
   }
 
   makeVao(pos, uv, strain, indices) {
@@ -165,8 +180,9 @@ export class Renderer {
 
     gl.disable(gl.BLEND);
     gl.uniform1f(this.loc.uSheen, 0);
+    const depth = this.showDepth ? this.depthView : null;
     gl.bindVertexArray(this.bg.vao);
-    gl.bindTexture(gl.TEXTURE_2D, this.bg.tex);
+    gl.bindTexture(gl.TEXTURE_2D, depth ? depth.bg : this.bg.tex);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, this.bg.count);
 
     if (this.jelly && this.showJelly && pos) {
@@ -189,7 +205,7 @@ export class Renderer {
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.jelly.strain);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, strain);
-      gl.bindTexture(gl.TEXTURE_2D, this.jelly.tex);
+      gl.bindTexture(gl.TEXTURE_2D, depth ? depth.fg : this.jelly.tex);
       gl.drawElements(gl.TRIANGLES, this.jelly.count, gl.UNSIGNED_INT, 0);
       gl.disable(gl.SCISSOR_TEST);
     }

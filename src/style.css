@@ -286,6 +286,36 @@ body.dragging .drop {
   margin-bottom: 4px;
 }
 
+.settings .sub {
+  padding-left: 24px;
+}
+
+.settings label:has(input:disabled) {
+  color: var(--muted);
+}
+
+.legend {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 0.8rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.legend-bar {
+  width: 96px;
+  height: 8px;
+  border-radius: 4px;
+}
+
 .settings .note {
   color: var(--muted);
   font-size: 0.8rem;

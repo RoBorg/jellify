@@ -1,5 +1,5 @@
 import { loadSegmenter, segment, SEG_SIZE } from './segment.js';
-import { loadDepth, estimateDepth, depthProfile } from './depth.js';
+import { loadDepth, estimateDepth, depthProfile, depthImages, INFERNO_CSS } from './depth.js';
 import { keepMainBlobs, buildMasks } from './mask.js';
 import { inpaint } from './inpaint.js';
 import { buildMesh, Jelly } from './jelly.js';
@@ -17,8 +17,10 @@ const statusEl = $('status');
 const settingsForm = $('settings');
 const settingsBtn = $('settings-btn');
 const hintEl = $('hint');
+const legendEl = $('depth-legend');
+legendEl.querySelector('.legend-bar').style.background = INFERNO_CSS;
 
-const settings = { wobble: 0.4, damping: 0.35, sensitivity: 1, hideJelly: false, mode: 'height' };
+const settings = { wobble: 0.4, damping: 0.35, sensitivity: 1, hideJelly: false, mode: 'height', showDepth: false };
 const windowTracker = new WindowTracker();
 const motion = new MotionTracker();
 
@@ -102,6 +104,8 @@ async function openImage(file) {
     canvas.hidden = false;
     renderer.setBackground(photo, w, h);
     renderer.setJelly(null);
+    renderer.setDepthView(null);
+    updateDepthView();
     imageDiag = Math.hypot(w, h);
     needsDraw = true;
 
@@ -138,7 +142,7 @@ async function openImage(file) {
     renderer.setJelly(fg, mesh);
     jelly = new Jelly(mesh);
     jelly.setParams(settings);
-    scene = { photo, matte, w, h, mesh, depth: null };
+    scene = { photo, matte, hole, w, h, mesh, depth: null };
 
     // A little boing so it's obvious what happened.
     const size = mesh.bounds.y1 - mesh.bounds.y0;
@@ -187,15 +191,30 @@ async function applyMode() {
         status('Estimating depth…');
         await nextFrame();
         const depth = await estimateDepth(current.photo);
-        return depthProfile(depth, current.matte, current.w, current.h, current.mesh.rest, current.mesh.spacing * 1.5);
+        const { mesh, matte, hole, w, h } = current;
+        const images = depthImages(depth, matte, hole, w, h);
+        const toCanvas = (img) => {
+          const c = makeCanvas(img.width, img.height);
+          c.getContext('2d').putImageData(img, 0, 0);
+          return c;
+        };
+        return {
+          profile: depthProfile(depth, matte, w, h, mesh.rest, mesh.spacing * 1.5),
+          view: { bg: toCanvas(images.bg), fg: toCanvas(images.fg) },
+        };
       })();
       current.depth.catch(() => {
         current.depth = null; // allow a retry
       });
     }
-    const profile = await current.depth;
+    const { profile, view } = await current.depth;
     status('');
     if (current !== scene || settings.mode !== 'depth') return;
+    if (!current.viewShown) {
+      renderer.setDepthView(view.bg, view.fg);
+      current.viewShown = true;
+    }
+    updateDepthView();
     jelly.setProfile(profile);
     // A small boing so the change is visible.
     const size = current.mesh.bounds.y1 - current.mesh.bounds.y0;
@@ -205,6 +224,14 @@ async function applyMode() {
     console.error(err);
     status("Couldn't estimate depth. Check your connection and try again.", { error: true });
   }
+}
+
+/** Show the depth map when it's asked for, in depth mode, and ready. */
+function updateDepthView() {
+  if (!renderer) return;
+  renderer.showDepth = settings.showDepth && settings.mode === 'depth' && !!renderer.depthView;
+  legendEl.hidden = !renderer.showDepth;
+  needsDraw = true;
 }
 
 function wake() {
@@ -349,7 +376,9 @@ settingsForm.addEventListener('input', () => {
   settings.damping = Number(f.damping.value);
   settings.sensitivity = Number(f.sensitivity.value);
   settings.hideJelly = f.hideJelly.checked;
+  settings.showDepth = f.showDepth.checked;
   const mode = f.mode.value;
+  f.showDepth.disabled = mode !== 'depth';
   jelly?.setParams(settings);
   renderer.showJelly = !settings.hideJelly;
   needsDraw = true;
@@ -357,5 +386,6 @@ settingsForm.addEventListener('input', () => {
     settings.mode = mode;
     applyMode();
   }
+  updateDepthView();
 });
 settingsForm.addEventListener('submit', (e) => e.preventDefault());

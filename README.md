@@ -42,7 +42,9 @@ from inside a tap, so the first tap on the photo shows its permission prompt.
      [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small)
      (int8, 27 MB, `src/depth.js`). It is downloaded only when this mode is
      first chosen, and depth is estimated once per photo. Parts nearest the
-     camera wobble most.
+     camera wobble most. "Show depth map" draws the scene with the estimated
+     depth as an inferno colour map (bright = near). The jelly wobbles in that
+     view too, and the background's hole is filled like the photo's.
 
    In both modes, parts of the subject that touch the photo's edge are pinned
    in place, so they don't pull away from the frame. Edge, shear and bend springs connect
