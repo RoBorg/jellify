@@ -13,8 +13,8 @@ npm run dev:phone  # HTTPS on your LAN, for testing device motion on a phone
 npm run build      # static site in dist/
 ```
 
-The model is downloaded into `public/models/` by `npm run fetch-model`, which
-runs automatically before `dev` and `build`.
+The models are downloaded into `public/models/` by `npm run fetch-model`,
+which runs automatically before `dev` and `build`.
 
 On phones, shake detection only works over HTTPS (`dev:phone` uses a
 self-signed certificate; accept the warning). iOS only allows motion access
@@ -26,14 +26,26 @@ from inside a tap, so the first tap on the photo shows its permission prompt.
    a 4.6 MB salient-object model, run with onnxruntime-web's WASM backend.
    It finds the main subject automatically, with no clicks needed. The runtime
    `.wasm` adds about 3.7 MB gzipped, so a first visit downloads about 8 MB.
+   Inference runs in a Web Worker (`src/ort-worker.js`) so the jelly keeps
+   animating meanwhile.
 2. **Mask clean-up** (`src/mask.js`): keep the main blobs, upsample, snap to
    image edges with a guided filter. The inpainting hole is that matte grown
    by a couple of pixels, so the subject's fringe isn't left behind.
 3. **Background fill** (`src/inpaint.js`): push-pull pyramid interpolation,
    with no model. Smooth rather than textured.
 4. **Jelly** (`src/jelly.js`): a grid mesh over the subject, simulated as a
-   mass-spring network. Each vertex is anchored to its rest position (stiff at
-   the base, loose at the top). Edge, shear and bend springs connect
+   mass-spring network. Each vertex is anchored to its rest position, with a
+   per-vertex firmness that comes from one of two modes (Settings → "Wobbliest
+   part"):
+   - **Top of the subject** (default): firm at the base, loose at the top.
+   - **Nearest the camera**: firmness from a depth map estimated by
+     [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small)
+     (int8, 27 MB, `src/depth.js`). It is downloaded only when this mode is
+     first chosen, and depth is estimated once per photo. Parts nearest the
+     camera wobble most.
+
+   In both modes, parts of the subject that touch the photo's edge are pinned
+   in place, so they don't pull away from the frame. Edge, shear and bend springs connect
    neighbours, and per-triangle area preservation stops the mesh from folding.
    The wobbliness slider scales all stiffnesses exponentially (4× to ½×), and
    damping scales with stiffness so firm jelly settles quickly.

@@ -273,9 +273,30 @@ body.dragging .drop {
   font-weight: 500;
 }
 
+.settings fieldset {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings legend {
+  padding: 0;
+  margin-bottom: 4px;
+}
+
+.settings .note {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.settings input {
+  accent-color: var(--accent);
+}
+
 .settings input[type='range'] {
   width: 100%;
-  accent-color: var(--accent);
 }
 
 @media (max-width: 480px) {

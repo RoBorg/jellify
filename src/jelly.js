@@ -96,10 +96,21 @@ export function buildMesh(alpha, w, h, cellsAcross = 26) {
     }
   }
 
+  // Where the subject runs off the edge of the photo it should stay attached
+  // to that edge, or pulling it away would open a gap at the frame.
+  const frame = new Float32Array(rest.length / 2);
+  for (let v = 0; v < frame.length; v++) {
+    const x = rest[v * 2];
+    const y = rest[v * 2 + 1];
+    const d = Math.min(x, y, w - x, h - y);
+    frame[v] = Math.min(1, Math.max(0, 1 - d / (spacing * 2)));
+  }
+
   return {
     rest: new Float32Array(rest),
     tris: new Uint32Array(tris),
     springs: [...springs.values()],
+    frame,
     spacing,
     bounds: { x0, y0, x1, y1 },
   };
@@ -141,13 +152,26 @@ export class Jelly {
       this.restArea[t] = signedArea(mesh.rest, mesh.tris[t * 3], mesh.tris[t * 3 + 1], mesh.tris[t * 3 + 2]);
     }
 
-    // 0 at the top of the subject, 1 at its base.
+    // How firmly each vertex is held, 0 (loosest) to 1 (firmest). By default
+    // it's height: 0 at the top of the subject, 1 at its base.
     const { y0, y1 } = mesh.bounds;
-    this.height = new Float32Array(n);
-    for (let i = 0; i < n; i++) this.height[i] = (mesh.rest[i * 2 + 1] - y0) / Math.max(1, y1 - y0);
+    this.heightProfile = new Float32Array(n);
+    for (let i = 0; i < n; i++) this.heightProfile[i] = (mesh.rest[i * 2 + 1] - y0) / Math.max(1, y1 - y0);
+    this.setProfile(null);
+
+    // Vertices within half a cell of the photo's edge don't move at all.
+    this.pinned = mesh.frame.map((f) => (f >= 0.75 ? 1 : 0));
 
     this.grabs = new Map();
     this.setParams({ wobble: 0.4, damping: 0.35 });
+  }
+
+  /** Swap the firmness profile (one value per vertex); null restores height. */
+  setProfile(profile) {
+    const base = profile ?? this.heightProfile;
+    // Parts touching the photo's edge are always held firm.
+    this.profile = base.map((t, i) => Math.max(t, this.mesh.frame[i]));
+    if (this.anchorK) this.setParams({});
   }
 
   /** wobble: 0 = firm, 1 = very floppy. damping: 0 = boings forever, 1 = settles fast. */
@@ -159,7 +183,7 @@ export class Jelly {
 
     this.anchorK = new Float32Array(this.count);
     for (let i = 0; i < this.count; i++) {
-      const t = this.height[i];
+      const t = this.profile[i];
       const hz = 0.9 + 7 * t ** 3;
       this.anchorK[i] = omega(hz) ** 2;
     }
@@ -206,16 +230,18 @@ export class Jelly {
 
   /** Teleport the body relative to its anchors, e.g. when the window jumps. */
   jolt(dx, dy) {
+    const { frame } = this.mesh;
     for (let i = 0; i < this.count; i++) {
-      this.pos[i * 2] += dx;
-      this.pos[i * 2 + 1] += dy;
+      // Parts glued to the photo's edge move with it.
+      this.pos[i * 2] += dx * (1 - frame[i]);
+      this.pos[i * 2 + 1] += dy * (1 - frame[i]);
     }
   }
 
-  /** Give the body a velocity kick, falling off towards its base. */
+  /** Give the body a velocity kick, falling off towards its firmest parts. */
   kick(vx, vy) {
     for (let i = 0; i < this.count; i++) {
-      const f = 1 - 0.8 * this.height[i];
+      const f = 1 - 0.8 * this.profile[i];
       this.vel[i * 2] += vx * f;
       this.vel[i * 2 + 1] += vy * f;
     }
@@ -237,10 +263,12 @@ export class Jelly {
   substep(h, ax, ay) {
     const { pos, vel, force, rest, anchorK, count } = this;
     const drag = this.drag;
+    const { frame } = this.mesh;
     for (let i = 0; i < count; i++) {
       const k = anchorK[i];
-      force[i * 2] = ax - k * (pos[i * 2] - rest[i * 2]) - drag * vel[i * 2];
-      force[i * 2 + 1] = ay - k * (pos[i * 2 + 1] - rest[i * 2 + 1]) - drag * vel[i * 2 + 1];
+      const free = 1 - frame[i];
+      force[i * 2] = ax * free - k * (pos[i * 2] - rest[i * 2]) - drag * vel[i * 2];
+      force[i * 2 + 1] = ay * free - k * (pos[i * 2 + 1] - rest[i * 2 + 1]) - drag * vel[i * 2 + 1];
     }
 
     const { springA, springB, springKind, restLen, springK, springC } = this;
@@ -295,7 +323,13 @@ export class Jelly {
       }
     }
 
+    const { pinned } = this;
     for (let i = 0; i < count * 2; i++) {
+      if (pinned[i >> 1]) {
+        vel[i] = 0;
+        pos[i] = rest[i];
+        continue;
+      }
       let v = vel[i] + force[i] * h;
       if (v > MAX_SPEED) v = MAX_SPEED;
       else if (v < -MAX_SPEED) v = -MAX_SPEED;

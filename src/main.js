@@ -1,4 +1,5 @@
 import { loadSegmenter, segment, SEG_SIZE } from './segment.js';
+import { loadDepth, estimateDepth, depthProfile } from './depth.js';
 import { keepMainBlobs, buildMasks } from './mask.js';
 import { inpaint } from './inpaint.js';
 import { buildMesh, Jelly } from './jelly.js';
@@ -17,12 +18,13 @@ const settingsForm = $('settings');
 const settingsBtn = $('settings-btn');
 const hintEl = $('hint');
 
-const settings = { wobble: 0.4, damping: 0.35, sensitivity: 1, hideJelly: false };
+const settings = { wobble: 0.4, damping: 0.35, sensitivity: 1, hideJelly: false, mode: 'height' };
 const windowTracker = new WindowTracker();
 const motion = new MotionTracker();
 
 let renderer = null;
 let jelly = null;
+let scene = null; // the current photo's working data, for depth mode
 let imageDiag = 1;
 let busy = false;
 let awake = false;
@@ -95,6 +97,7 @@ async function openImage(file) {
 
     // Show the photo while we work on it.
     jelly = null;
+    scene = null;
     $('intro').hidden = true;
     canvas.hidden = false;
     renderer.setBackground(photo, w, h);
@@ -135,6 +138,7 @@ async function openImage(file) {
     renderer.setJelly(fg, mesh);
     jelly = new Jelly(mesh);
     jelly.setParams(settings);
+    scene = { photo, matte, w, h, mesh, depth: null };
 
     // A little boing so it's obvious what happened.
     const size = mesh.bounds.y1 - mesh.bounds.y0;
@@ -151,11 +155,55 @@ async function openImage(file) {
     hintEl.style.animation = 'none';
     void hintEl.offsetWidth; // restart the fade-out
     hintEl.style.animation = '';
+    if (settings.mode === 'depth') applyMode();
   } catch (err) {
     console.error(err);
     setStatus(err instanceof UserError ? err.message : `Something went wrong: ${err.message}`, { error: true });
   } finally {
     busy = false;
+  }
+}
+
+/**
+ * Apply the firmness mode: "height" (the top wobbles most) or "depth" (the
+ * parts nearest the camera wobble most). Depth is estimated once per photo,
+ * the first time it's needed.
+ */
+async function applyMode() {
+  const current = scene;
+  if (!jelly || !current) return;
+  if (settings.mode !== 'depth') {
+    jelly.setProfile(null);
+    wake();
+    return;
+  }
+  // Only touch the status pill while this photo is still the one on screen.
+  const status = (text, opts) => current === scene && setStatus(text, opts);
+  try {
+    if (!current.depth) {
+      current.depth = (async () => {
+        status('Loading the depth model…');
+        await loadDepth();
+        status('Estimating depth…');
+        await nextFrame();
+        const depth = await estimateDepth(current.photo);
+        return depthProfile(depth, current.matte, current.w, current.h, current.mesh.rest, current.mesh.spacing * 1.5);
+      })();
+      current.depth.catch(() => {
+        current.depth = null; // allow a retry
+      });
+    }
+    const profile = await current.depth;
+    status('');
+    if (current !== scene || settings.mode !== 'depth') return;
+    jelly.setProfile(profile);
+    // A small boing so the change is visible.
+    const size = current.mesh.bounds.y1 - current.mesh.bounds.y0;
+    jelly.kick(size * 0.4, size * 0.6);
+    wake();
+  } catch (err) {
+    console.error(err);
+    status("Couldn't estimate depth. Check your connection and try again.", { error: true });
   }
 }
 
@@ -288,3 +336,26 @@ if (MotionTracker.supported()) {
     motion.start();
   }
 }
+
+// --- Settings ---
+
+settingsBtn.addEventListener('click', () => {
+  settingsForm.hidden = !settingsForm.hidden;
+  settingsBtn.setAttribute('aria-expanded', String(!settingsForm.hidden));
+});
+settingsForm.addEventListener('input', () => {
+  const f = settingsForm.elements;
+  settings.wobble = Number(f.wobble.value);
+  settings.damping = Number(f.damping.value);
+  settings.sensitivity = Number(f.sensitivity.value);
+  settings.hideJelly = f.hideJelly.checked;
+  const mode = f.mode.value;
+  jelly?.setParams(settings);
+  renderer.showJelly = !settings.hideJelly;
+  needsDraw = true;
+  if (mode !== settings.mode) {
+    settings.mode = mode;
+    applyMode();
+  }
+});
+settingsForm.addEventListener('submit', (e) => e.preventDefault());
