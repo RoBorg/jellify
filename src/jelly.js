@@ -10,7 +10,7 @@
 // with semi-implicit Euler in small fixed substeps.
 
 const TAU = Math.PI * 2;
-const SUBSTEP = 1 / 600;
+const SUBSTEP = 1 / 1200; // small enough to stay stable at the firmest setting
 const MAX_SPEED = 30000; // px/s, guards against blow-ups
 
 /** Build a grid mesh over the pixels of `alpha` that are part of the subject. */
@@ -147,14 +147,14 @@ export class Jelly {
     for (let i = 0; i < n; i++) this.height[i] = (mesh.rest[i * 2 + 1] - y0) / Math.max(1, y1 - y0);
 
     this.grabs = new Map();
-    this.setParams({ wobble: 0.6, damping: 0.35 });
+    this.setParams({ wobble: 0.4, damping: 0.35 });
   }
 
   /** wobble: 0 = firm, 1 = very floppy. damping: 0 = boings forever, 1 = settles fast. */
   setParams({ wobble = this.wobble, damping = this.damping }) {
     this.wobble = wobble;
     this.damping = damping;
-    const firm = 1.6 - 1.2 * wobble; // frequency multiplier
+    const firm = 2 ** (2 - 3 * wobble); // frequency multiplier: 4× at wobble 0, ½× at 1
     const omega = (hz) => TAU * hz * firm;
 
     this.anchorK = new Float32Array(this.count);
@@ -166,7 +166,8 @@ export class Jelly {
     this.springK = [omega(8) ** 2, omega(6) ** 2, omega(2) ** 2];
     this.springC = this.springK.map((k) => 2 * (0.04 + 0.12 * damping) * Math.sqrt(k));
     this.areaK = omega(7) ** 2;
-    this.drag = 0.6 + 5 * damping;
+    // Scale with stiffness so firm jelly settles in a similar number of wobbles.
+    this.drag = 2 * (0.05 + 0.6 * damping) * omega(1);
   }
 
   grab(id, x, y) {
@@ -227,7 +228,7 @@ export class Jelly {
    * @param {number} ay
    */
   step(dt, ax = 0, ay = 0) {
-    const steps = Math.min(40, Math.ceil(dt / SUBSTEP));
+    const steps = Math.min(80, Math.ceil(dt / SUBSTEP));
     const h = dt / steps;
     for (let s = 0; s < steps; s++) this.substep(h, ax, ay);
     this.updateStrain();

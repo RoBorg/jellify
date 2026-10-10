@@ -166,28 +166,25 @@ const smoothstep = (e0, e1, x) => {
 };
 
 /**
- * Build the masks for the jelly layer and the inpainting hole.
+ * Build the subject's alpha matte and the inpainting hole at full resolution.
  *
- * The hole is a bit larger than the subject, so its fringe pixels (which are
- * partly subject-coloured) don't get left behind on the background. The
- * jelly layer is opaque over the whole hole and feathers out beyond it, so
- * at rest the picture is identical to the original photo and the fringe
- * travels with the subject.
+ * The hole is the matte grown by a couple of pixels, so the subject's fringe
+ * (partly subject-coloured pixels) doesn't get left behind on the background,
+ * while staying thin enough not to show as a halo at rest.
  *
- * @returns {{ jellyAlpha: Float32Array, hole: Float32Array }}
+ * @returns {{ matte: Float32Array, hole: Float32Array }}
  */
 export function buildMasks(saliency, segSize, rgba, w, h) {
   const n = w * h;
   const up = resizeBilinear(saliency, segSize, segSize, w, h);
   const r = Math.max(4, Math.round(Math.max(w, h) / 110));
   const refined = guidedFilter(luminance(rgba, n), up, w, h, r, 1e-3);
-
-  const loose = new Float32Array(n);
-  for (let i = 0; i < n; i++) loose[i] = smoothstep(0.3, 0.7, refined[i]) > 0.02 || up[i] > 0.15 ? 1 : 0;
-  const margin = Math.round(Math.max(w, h) * 0.008) + 2;
-  const hole = dilate(loose, w, h, margin);
-
-  const jellyAlpha = boxBlur(dilate(hole, w, h, margin), w, h, margin);
-  for (let i = 0; i < n; i++) jellyAlpha[i] = smoothstep(0, 1, jellyAlpha[i]);
-  return { jellyAlpha, hole };
+  const matte = new Float32Array(n);
+  const solid = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    matte[i] = smoothstep(0.3, 0.7, refined[i]);
+    solid[i] = matte[i] > 0.02 ? 1 : 0;
+  }
+  const hole = dilate(solid, w, h, Math.max(2, Math.round(Math.max(w, h) / 400)));
+  return { matte, hole };
 }

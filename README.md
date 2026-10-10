@@ -27,15 +27,16 @@ self-signed certificate; accept the warning). iOS also needs the
    It finds the main subject automatically, with no clicks needed. The runtime
    `.wasm` adds about 3.7 MB gzipped, so a first visit downloads about 8 MB.
 2. **Mask clean-up** (`src/mask.js`): keep the main blobs, upsample, snap to
-   image edges with a guided filter, then dilate to get the inpainting hole.
+   image edges with a guided filter. The inpainting hole is that matte grown
+   by a couple of pixels, so the subject's fringe isn't left behind.
 3. **Background fill** (`src/inpaint.js`): push-pull pyramid interpolation,
    with no model. Smooth rather than textured.
 4. **Jelly** (`src/jelly.js`): a grid mesh over the subject, simulated as a
    mass-spring network. Each vertex is anchored to its rest position (stiff at
    the base, loose at the top). Edge, shear and bend springs connect
    neighbours, and per-triangle area preservation stops the mesh from folding.
-   The jelly layer is opaque over the whole hole and feathers out past it, so
-   at rest the picture is pixel-identical to the photo.
+   The wobbliness slider scales all stiffnesses exponentially (4× to ½×), and
+   damping scales with stiffness so firm jelly settles quickly.
 5. **Rendering** (`src/renderer.js`): WebGL2, with the background as a quad
    and the textured jelly mesh on top. Stretched areas get a slight sheen.
 6. **Input** (`src/input.js`): pointer events; `screenX/screenY` polling for

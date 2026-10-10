@@ -18,7 +18,7 @@ const settingsBtn = $('settings-btn');
 const motionBtn = $('motion-btn');
 const hintEl = $('hint');
 
-const settings = { wobble: 0.6, damping: 0.35, sensitivity: 1, hideJelly: false };
+const settings = { wobble: 0.4, damping: 0.35, sensitivity: 1, hideJelly: false };
 const windowTracker = new WindowTracker();
 const motion = new MotionTracker();
 
@@ -117,8 +117,8 @@ async function openImage(file) {
 
     setStatus('Cutting it out…');
     await nextFrame();
-    const { jellyAlpha, hole } = buildMasks(saliency, SEG_SIZE, rgba, w, h);
-    const mesh = buildMesh(jellyAlpha, w, h);
+    const { matte, hole } = buildMasks(saliency, SEG_SIZE, rgba, w, h);
+    const mesh = buildMesh(matte, w, h);
     if (!mesh) throw new UserError("Couldn't find a clear subject in that photo.");
 
     setStatus('Filling in the background…');
@@ -128,7 +128,7 @@ async function openImage(file) {
     const bg = makeCanvas(w, h);
     bg.getContext('2d').putImageData(new ImageData(filled, w, h), 0, 0);
     const cutout = new Uint8ClampedArray(rgba);
-    for (let i = 0; i < w * h; i++) cutout[i * 4 + 3] = jellyAlpha[i] * 255;
+    for (let i = 0; i < w * h; i++) cutout[i * 4 + 3] = matte[i] * 255;
     const fg = makeCanvas(w, h);
     fg.getContext('2d').putImageData(new ImageData(cutout, w, h), 0, 0);
 
