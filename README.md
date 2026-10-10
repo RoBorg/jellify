@@ -17,8 +17,8 @@ The model is downloaded into `public/models/` by `npm run fetch-model`, which
 runs automatically before `dev` and `build`.
 
 On phones, shake detection only works over HTTPS (`dev:phone` uses a
-self-signed certificate; accept the warning). iOS also needs the
-"Enable shake" button tapped once to grant motion access.
+self-signed certificate; accept the warning). iOS only allows motion access
+from inside a tap, so the first tap on the photo shows its permission prompt.
 
 ## How it works
 

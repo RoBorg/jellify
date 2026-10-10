@@ -15,7 +15,6 @@ const fileInput = $('file');
 const statusEl = $('status');
 const settingsForm = $('settings');
 const settingsBtn = $('settings-btn');
-const motionBtn = $('motion-btn');
 const hintEl = $('hint');
 
 const settings = { wobble: 0.4, damping: 0.35, sensitivity: 1, hideJelly: false };
@@ -265,33 +264,27 @@ window.addEventListener('paste', (e) => {
 
 if (MotionTracker.supported()) {
   if (MotionTracker.needsPermission()) {
-    motionBtn.hidden = false;
-    motionBtn.addEventListener('click', async () => {
+    // iOS only grants motion access from inside a tap, so ask on the first
+    // tap on the photo. Asking from the photo-picker tap would clash with the
+    // file dialog.
+    let asking = false; // one tap fires both touchend and click
+    const ask = async () => {
+      if (asking) return;
+      asking = true;
       try {
-        if (await motion.start()) motionBtn.hidden = true;
+        await motion.start();
       } catch (err) {
         console.error(err);
+        return; // not counted as a user gesture; try again next tap
+      } finally {
+        asking = false;
       }
-    });
+      canvas.removeEventListener('touchend', ask);
+      canvas.removeEventListener('click', ask);
+    };
+    canvas.addEventListener('touchend', ask);
+    canvas.addEventListener('click', ask);
   } else {
     motion.start();
   }
 }
-
-// --- Settings ---
-
-settingsBtn.addEventListener('click', () => {
-  settingsForm.hidden = !settingsForm.hidden;
-  settingsBtn.setAttribute('aria-expanded', String(!settingsForm.hidden));
-});
-settingsForm.addEventListener('input', () => {
-  const f = settingsForm.elements;
-  settings.wobble = Number(f.wobble.value);
-  settings.damping = Number(f.damping.value);
-  settings.sensitivity = Number(f.sensitivity.value);
-  settings.hideJelly = f.hideJelly.checked;
-  jelly?.setParams(settings);
-  renderer.showJelly = !settings.hideJelly;
-  needsDraw = true;
-});
-settingsForm.addEventListener('submit', (e) => e.preventDefault());
