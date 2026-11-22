@@ -3,6 +3,10 @@
 Turn the main subject of a photo into wobbly jelly, entirely in the browser.
 Drag it with the mouse or a finger, shake the browser window, or shake your phone.
 
+Or switch to **Googly eyes** (the toggle in the header): every face in the
+photo gets a pair of googly eyes whose pupils rattle around when you shake the
+window or the phone, or drag the eyes.
+
 ## Running
 
 ```sh
@@ -56,11 +60,28 @@ from inside a tap, so the first tap on the photo shows its permission prompt.
 6. **Input** (`src/input.js`): pointer events; `screenX/screenY` polling for
    window shakes (there's no event for that); `devicemotion` for phone shakes.
 
+## Googly eyes
+
+1. **Face detection** (`src/faces.js`): [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
+   (OpenCV Zoo, MIT, 230 KB), downloaded when the mode is first chosen. It
+   gives each face's eye landmarks; each eye is centred on one, sized to
+   0.45× the gap between them. Up to 40 faces get eyes.
+2. **No faces**: a pair goes near the top of the main subject found by U²-Netp,
+   or in the middle of the photo. Eyes can be dragged anywhere.
+3. **Physics** (`src/googly.js`): each pupil is a disc loose inside its eye,
+   simulated in the eye's frame. It falls under gravity, and the eye's own
+   acceleration (from window moves, drags, or device motion) pushes it the
+   other way. It bounces off the rim and rolls to a stop. Accelerations are
+   scaled as if every eye were 5 cm across, so big and small eyes behave alike.
+4. **Rendering**: a 2D canvas laid over the WebGL photo.
+
 ## Known limitations
 
 - The background fill is a blur. A small inpainting model (e.g. MI-GAN) would
   be the next upgrade.
 - U²-Netp picks one "salient" thing; there's no way to choose a different
   subject yet. A SlimSAM-77 tap-to-select mode (~14 MB) could be added.
+- Googly-eye gravity always points down the screen; it doesn't follow the
+  phone's tilt.
 - Window-shake detection does nothing on Wayland or when the window is
   maximised, because `screenX/Y` don't change.

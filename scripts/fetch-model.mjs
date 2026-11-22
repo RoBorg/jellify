@@ -18,6 +18,12 @@ const MODELS = [
     url: 'https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model_int8.onnx',
     sha256: '01aa7a23de3f4a0ee1a2bb9997e6918104c85a9f95dea46d27b9b3fb0c6b9001',
   },
+  {
+    // YuNet face detector (OpenCV Zoo, MIT), 230 KB. Only loaded for googly eyes.
+    file: 'face_detection_yunet_2023mar.onnx',
+    url: 'https://huggingface.co/opencv/face_detection_yunet/resolve/3cc26e7f1014a5ee5d74a42acee58bafc9d0a310/face_detection_yunet_2023mar.onnx',
+    sha256: '8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4',
+  },
 ];
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'models');

@@ -5,13 +5,18 @@ import { inpaint } from './inpaint.js';
 import { buildMesh, Jelly } from './jelly.js';
 import { Renderer } from './renderer.js';
 import { attachPointer, WindowTracker, MotionTracker } from './input.js';
+import { loadFaceDetector, detectFaces } from './faces.js';
+import { Googly, placeEyes } from './googly.js';
 
 const MAX_SIDE = 1024; // working resolution, px on the long side
+const MAX_FACES = 40;
 const MOTION_GAIN = 0.6; // px/s² of jelly push per m/s² of device acceleration, per px of image diagonal
 const MOTION_DEADZONE = 0.25; // m/s², ignores sensor noise while the phone is still
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
+const eyesCanvas = $('eyes');
+const eyesCtx = eyesCanvas.getContext('2d');
 const fileInput = $('file');
 const statusEl = $('status');
 const settingsForm = $('settings');
@@ -20,15 +25,27 @@ const hintEl = $('hint');
 const legendEl = $('depth-legend');
 legendEl.querySelector('.legend-bar').style.background = INFERNO_CSS;
 
-const settings = { wobble: 0.4, damping: 0.35, sensitivity: 1, hideJelly: false, mode: 'height', showDepth: false };
+const settings = {
+  effect: 'jelly', // or 'googly'
+  wobble: 0.4,
+  damping: 0.35,
+  sensitivity: 1,
+  hideJelly: false,
+  mode: 'height',
+  showDepth: false,
+  eyeSize: 1,
+  eyeOverlap: false,
+};
 const windowTracker = new WindowTracker();
 const motion = new MotionTracker();
 
 let renderer = null;
+let photo = null; // the current photo, and what's been worked out from it so far
+let processing = 0; // bumped for each new photo or effect, so stale work can bail out
 let jelly = null;
-let scene = null; // the current photo's working data, for depth mode
+let scene = null; // the current photo's jelly data, for depth mode
+let googly = null;
 let imageDiag = 1;
-let busy = false;
 let awake = false;
 let needsDraw = false;
 
@@ -40,7 +57,8 @@ try {
   setStatus(err.message, { error: true });
 }
 
-// Start fetching the model straight away so it's ready by the time a photo is picked.
+// Start fetching the models straight away so they're ready by the time a
+// photo is picked. Googly eyes fall back to the subject when there's no face.
 loadSegmenter().catch(() => {});
 
 function setStatus(text, { error = false } = {}) {
@@ -78,57 +96,119 @@ function makeCanvas(w, h) {
 }
 
 async function openImage(file) {
-  if (busy || !renderer || !file) return;
-  busy = true;
+  if (!renderer || !file) return;
+  const run = ++processing;
   hintEl.hidden = true;
   try {
     setStatus('Opening photo…');
     const bitmap = await decode(file);
+    if (run !== processing) return;
     const srcW = bitmap.width;
     const srcH = bitmap.height;
     const scale = Math.min(1, MAX_SIDE / Math.max(srcW, srcH));
     const w = Math.max(1, Math.round(srcW * scale));
     const h = Math.max(1, Math.round(srcH * scale));
 
-    const photo = makeCanvas(w, h);
-    const pctx = photo.getContext('2d', { willReadFrequently: true });
+    const image = makeCanvas(w, h);
+    const pctx = image.getContext('2d', { willReadFrequently: true });
     pctx.imageSmoothingQuality = 'high';
     pctx.drawImage(bitmap, 0, 0, w, h);
     bitmap.close?.();
     const rgba = pctx.getImageData(0, 0, w, h).data;
 
-    // Show the photo while we work on it.
-    jelly = null;
-    scene = null;
+    photo = { canvas: image, rgba, w, h, subject: null, jelly: null, eyes: null };
     $('intro').hidden = true;
-    canvas.hidden = false;
-    renderer.setBackground(photo, w, h);
-    renderer.setJelly(null);
-    renderer.setDepthView(null);
-    updateDepthView();
     imageDiag = Math.hypot(w, h);
-    needsDraw = true;
+    await applyEffect();
+  } catch (err) {
+    if (run !== processing) return;
+    console.error(err);
+    setStatus(err instanceof UserError ? err.message : `Something went wrong: ${err.message}`, { error: true });
+  }
+}
 
-    setStatus('Loading the cut-out model…');
-    await loadSegmenter().catch(() => {
-      throw new UserError("Couldn't load the cut-out model. Check your connection and try again.");
+/** Show the current photo with the current effect, working it out if needed. */
+async function applyEffect() {
+  const current = photo;
+  if (!current) return;
+  const run = ++processing;
+  const stale = () => run !== processing;
+
+  // Show the plain photo while we work on it.
+  jelly = null;
+  scene = null;
+  googly = null;
+  hintEl.hidden = true;
+  canvas.hidden = false;
+  canvas.classList.toggle('googly', settings.effect === 'googly');
+  eyesCanvas.hidden = settings.effect !== 'googly';
+  eyesCtx.clearRect(0, 0, eyesCanvas.width, eyesCanvas.height);
+  renderer.setBackground(current.canvas, current.w, current.h);
+  renderer.setJelly(null);
+  renderer.setDepthView(null);
+  updateDepthView();
+  needsDraw = true;
+
+  try {
+    const hint = settings.effect === 'googly' ? await showEyes(current, stale) : await showJelly(current, stale);
+    if (stale()) return;
+    setStatus('');
+    settingsBtn.hidden = false;
+    $('new-btn').textContent = 'New photo';
+    hintEl.textContent = hint;
+    hintEl.hidden = false;
+    hintEl.style.animation = 'none';
+    void hintEl.offsetWidth; // restart the fade-out
+    hintEl.style.animation = '';
+    wake();
+  } catch (err) {
+    if (stale()) return;
+    console.error(err);
+    setStatus(err instanceof UserError ? err.message : `Something went wrong: ${err.message}`, { error: true });
+  }
+}
+
+const shakeHint = () => (matchMedia('(pointer: coarse)').matches ? 'shake your phone' : 'shake the browser window');
+
+/** The photo's main subject: a SEG_SIZE² saliency map with only its main blobs kept, or null. */
+function findSubject(current) {
+  if (!current.subject) {
+    current.subject = (async () => {
+      setStatus('Loading the cut-out model…');
+      await loadSegmenter().catch(() => {
+        throw new UserError("Couldn't load the cut-out model. Check your connection and try again.");
+      });
+      setStatus('Finding the subject…');
+      await nextFrame();
+      const map = await segment(current.canvas);
+      return keepMainBlobs(map, SEG_SIZE, SEG_SIZE) ? map : null;
+    })();
+    current.subject.catch(() => {
+      current.subject = null; // allow a retry
     });
+  }
+  return current.subject;
+}
 
-    setStatus('Finding the subject…');
-    await nextFrame();
-    const saliency = await segment(photo);
-    if (!keepMainBlobs(saliency, SEG_SIZE, SEG_SIZE)) {
+async function showJelly(current, stale) {
+  if (!current.jelly) {
+    const saliency = await findSubject(current);
+    if (stale()) return;
+    if (!saliency) {
       throw new UserError("Couldn't find a clear subject in that photo. Try one with a single, obvious subject.");
     }
 
+    const { rgba, w, h } = current;
     setStatus('Cutting it out…');
     await nextFrame();
+    if (stale()) return;
     const { matte, hole } = buildMasks(saliency, SEG_SIZE, rgba, w, h);
     const mesh = buildMesh(matte, w, h);
     if (!mesh) throw new UserError("Couldn't find a clear subject in that photo.");
 
     setStatus('Filling in the background…');
     await nextFrame();
+    if (stale()) return;
     const filled = inpaint(rgba, hole, w, h);
 
     const bg = makeCanvas(w, h);
@@ -137,35 +217,48 @@ async function openImage(file) {
     for (let i = 0; i < w * h; i++) cutout[i * 4 + 3] = matte[i] * 255;
     const fg = makeCanvas(w, h);
     fg.getContext('2d').putImageData(new ImageData(cutout, w, h), 0, 0);
-
-    renderer.setBackground(bg, w, h);
-    renderer.setJelly(fg, mesh);
-    jelly = new Jelly(mesh);
-    jelly.setParams(settings);
-    scene = { photo, matte, hole, w, h, mesh, depth: null };
-
-    // A little boing so it's obvious what happened.
-    const size = mesh.bounds.y1 - mesh.bounds.y0;
-    jelly.kick(size * 0.6, size * 1.2);
-    wake();
-
-    setStatus('');
-    settingsBtn.hidden = false;
-    $('new-btn').textContent = 'New photo';
-    hintEl.textContent = matchMedia('(pointer: coarse)').matches
-      ? 'Drag it, or shake your phone'
-      : 'Drag it, or shake the browser window';
-    hintEl.hidden = false;
-    hintEl.style.animation = 'none';
-    void hintEl.offsetWidth; // restart the fade-out
-    hintEl.style.animation = '';
-    if (settings.mode === 'depth') applyMode();
-  } catch (err) {
-    console.error(err);
-    setStatus(err instanceof UserError ? err.message : `Something went wrong: ${err.message}`, { error: true });
-  } finally {
-    busy = false;
+    current.jelly = { photo: current.canvas, matte, hole, w, h, mesh, bg, fg, depth: null };
   }
+  if (stale()) return;
+
+  const js = current.jelly;
+  renderer.setBackground(js.bg, js.w, js.h);
+  renderer.setJelly(js.fg, js.mesh);
+  js.viewShown = false;
+  jelly = new Jelly(js.mesh);
+  jelly.setParams(settings);
+  scene = js;
+
+  // A little boing so it's obvious what happened.
+  const size = js.mesh.bounds.y1 - js.mesh.bounds.y0;
+  jelly.kick(size * 0.6, size * 1.2);
+  if (settings.mode === 'depth') applyMode();
+  return `Drag it, or ${shakeHint()}`;
+}
+
+async function showEyes(current, stale) {
+  let note = '';
+  if (!current.eyes) {
+    setStatus('Loading the face finder…');
+    await loadFaceDetector().catch(() => {
+      throw new UserError("Couldn't load the face finder. Check your connection and try again.");
+    });
+    setStatus('Looking for faces…');
+    await nextFrame();
+    const faces = (await detectFaces(current.canvas)).slice(0, MAX_FACES);
+    if (stale()) return;
+    let subject = null;
+    if (!faces.length) {
+      const map = await findSubject(current);
+      if (stale()) return;
+      if (map) subject = { map, size: SEG_SIZE };
+      note = 'No faces found, so they went on top. ';
+    }
+    current.eyes = placeEyes(faces, subject, current.w, current.h);
+  }
+  googly = new Googly(current.eyes, current.w, current.h);
+  googly.setParams(settings);
+  return `${note}Drag the eyes, or ${shakeHint()}`;
 }
 
 /**
@@ -238,6 +331,30 @@ function wake() {
   awake = true;
 }
 
+/** Device acceleration felt by the scene (m/s², screen axes), past the deadzone and scaled by sensitivity. */
+function motionForce() {
+  if (!motion.active) return [0, 0];
+  const mag = Math.hypot(motion.ax, motion.ay);
+  if (mag <= MOTION_DEADZONE) return [0, 0];
+  // The photo moves with the device; what's loose on it is left behind.
+  const f = (-settings.sensitivity * (mag - MOTION_DEADZONE)) / mag;
+  return [motion.ax * f, motion.ay * f];
+}
+
+function drawEyes() {
+  // Match the drawing buffer to the overlay's CSS size, as the renderer does.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(eyesCanvas.clientWidth * dpr));
+  const h = Math.max(1, Math.round(eyesCanvas.clientHeight * dpr));
+  if (eyesCanvas.width !== w || eyesCanvas.height !== h) {
+    eyesCanvas.width = w;
+    eyesCanvas.height = h;
+  }
+  eyesCtx.setTransform(1, 0, 0, 1, 0, 0);
+  eyesCtx.clearRect(0, 0, eyesCanvas.width, eyesCanvas.height);
+  googly.draw(eyesCtx, renderer.fit, dpr);
+}
+
 let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
@@ -246,6 +363,22 @@ function frame(now) {
   if (!renderer) return;
 
   const [wx, wy] = windowTracker.poll();
+  const [fx, fy] = motionForce();
+
+  if (googly) {
+    // The eyes move with the window; their pupils' inertia leaves them behind.
+    const k = settings.sensitivity / renderer.fit.scale;
+    if (wx || wy || fx || fy) wake();
+    if (needsDraw) renderer.draw(null, null);
+    if (awake || needsDraw) {
+      googly.step(dt, fx, fy, wx * k, wy * k);
+      drawEyes();
+      if (googly.isAtRest()) awake = false;
+    }
+    needsDraw = false;
+    return;
+  }
+
   if (!jelly) {
     if (needsDraw) renderer.draw(null, null);
     needsDraw = false;
@@ -261,17 +394,9 @@ function frame(now) {
     wake();
   }
 
-  let ax = 0;
-  let ay = 0;
-  if (motion.active) {
-    const mag = Math.hypot(motion.ax, motion.ay);
-    if (mag > MOTION_DEADZONE) {
-      const g = (-settings.sensitivity * MOTION_GAIN * imageDiag * (mag - MOTION_DEADZONE)) / mag;
-      ax = motion.ax * g;
-      ay = motion.ay * g;
-      wake();
-    }
-  }
+  const ax = fx * MOTION_GAIN * imageDiag;
+  const ay = fy * MOTION_GAIN * imageDiag;
+  if (ax || ay) wake();
 
   if (!awake && !needsDraw) return;
   jelly.step(dt, ax, ay);
@@ -284,15 +409,19 @@ requestAnimationFrame(frame);
 attachPointer(canvas, {
   toImage: (x, y) => renderer.toImage(x, y),
   grab: (id, x, y) => {
-    if (!jelly) return false;
+    const target = googly ?? jelly;
+    if (!target) return false;
     wake();
-    return jelly.grab(id, x, y);
+    return target.grab(id, x, y);
   },
   move: (id, x, y) => {
-    jelly?.moveGrab(id, x, y);
+    (googly ?? jelly)?.moveGrab(id, x, y);
     wake();
   },
-  release: (id) => jelly?.release(id),
+  release: (id) => {
+    jelly?.release(id);
+    googly?.release(id);
+  },
 });
 
 new ResizeObserver(() => {
@@ -377,9 +506,13 @@ settingsForm.addEventListener('input', () => {
   settings.sensitivity = Number(f.sensitivity.value);
   settings.hideJelly = f.hideJelly.checked;
   settings.showDepth = f.showDepth.checked;
+  settings.eyeSize = Number(f.eyeSize.value);
+  settings.eyeOverlap = f.eyeOverlap.checked;
   const mode = f.mode.value;
   f.showDepth.disabled = mode !== 'depth';
   jelly?.setParams(settings);
+  googly?.setParams(settings);
+  wake();
   renderer.showJelly = !settings.hideJelly;
   needsDraw = true;
   if (mode !== settings.mode) {
@@ -389,3 +522,40 @@ settingsForm.addEventListener('input', () => {
   updateDepthView();
 });
 settingsForm.addEventListener('submit', (e) => e.preventDefault());
+$('reset-eyes').addEventListener('click', () => {
+  googly?.reset();
+  wake();
+});
+
+// --- Effect: jelly or googly eyes ---
+
+const EFFECT_KEY = 'jellify:effect';
+const effectInputs = document.querySelectorAll('input[name="effect"]');
+
+function setEffect(effect) {
+  settings.effect = effect;
+  for (const input of effectInputs) input.checked = input.value === effect;
+  for (const el of document.querySelectorAll('[data-effect]')) el.hidden = el.dataset.effect !== effect;
+  $('brand-mark').textContent = effect === 'googly' ? '👀' : '🍮';
+  if (effect === 'googly') loadFaceDetector().catch(() => {});
+  try {
+    localStorage.setItem(EFFECT_KEY, effect);
+  } catch {
+    // Storage blocked; the choice just won't be remembered.
+  }
+}
+
+for (const input of effectInputs) {
+  input.addEventListener('change', () => {
+    if (!input.checked) return;
+    setEffect(input.value);
+    applyEffect();
+  });
+}
+
+try {
+  const saved = localStorage.getItem(EFFECT_KEY);
+  if (saved === 'googly' || saved === 'jelly') setEffect(saved);
+} catch {
+  // Storage blocked; start with jelly.
+}

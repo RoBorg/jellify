@@ -21,7 +21,8 @@ function call(msg, transfer = []) {
 
 /**
  * A model at `path` (relative to the site root), loaded on first use.
- * @returns {{ load: () => Promise<void>, run: (input) => Promise<{ data: Float32Array, dims: number[] }> }}
+ * `run` resolves to the first output; `runAll` to every output, by name.
+ * @returns {{ load: () => Promise<void>, run: (input) => Promise<{ data: Float32Array, dims: number[] }>, runAll: (input) => Promise<Record<string, { data: Float32Array, dims: number[] }>> }}
  */
 export function model(path) {
   const url = new URL(`${import.meta.env.BASE_URL}${path}`, location.href).href;
@@ -39,11 +40,15 @@ export function model(path) {
     await load();
     return call({ url, input }, [input.data.buffer]);
   };
-  return { load, run };
+  const runAll = async (input) => {
+    await load();
+    return (await call({ url, input, all: true }, [input.data.buffer])).outputs;
+  };
+  return { load, run, runAll };
 }
 
 /** Draw `source` at w×h and return it as a normalised NCHW float tensor. */
-export function imageTensor(source, w, h, mean, std, { scaleByMax = false } = {}) {
+export function imageTensor(source, w, h, mean, std, { scaleByMax = false, bgr = false } = {}) {
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingQuality = 'high';
@@ -58,7 +63,10 @@ export function imageTensor(source, w, h, mean, std, { scaleByMax = false } = {}
   const n = w * h;
   const input = new Float32Array(3 * n);
   for (let i = 0; i < n; i++) {
-    for (let c = 0; c < 3; c++) input[c * n + i] = (data[i * 4 + c] / max - mean[c]) / std[c];
+    for (let c = 0; c < 3; c++) {
+      const src = bgr ? 2 - c : c;
+      input[c * n + i] = (data[i * 4 + src] / max - mean[c]) / std[c];
+    }
   }
   return { data: input, dims: [1, 3, h, w] };
 }
