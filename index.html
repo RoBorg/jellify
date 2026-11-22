@@ -14,6 +14,7 @@
       <div class="effect" role="radiogroup" aria-label="Effect">
         <label><input name="effect" type="radio" value="jelly" checked /><span>🍮 Jelly</span></label>
         <label><input name="effect" type="radio" value="googly" /><span>👀 Googly eyes</span></label>
+        <label><input name="effect" type="radio" value="both" /><span>Both</span></label>
       </div>
       <div class="actions">
         <button id="settings-btn" class="btn" type="button" aria-expanded="false" aria-controls="settings" hidden>Settings</button>
@@ -29,7 +30,7 @@
         <div class="drop">
           <p class="drop-title">Drop a photo here</p>
           <p class="drop-sub">or <button id="intro-btn" class="link" type="button">choose one</button>, or paste from the clipboard</p>
-          <p class="drop-note"><span data-effect="jelly">The main subject gets cut out and turned to jelly.</span><span data-effect="googly" hidden>Every face gets a pair of googly eyes.</span> Everything runs on your device; the first visit downloads about 8&nbsp;MB.</p>
+          <p class="drop-note"><span data-effect="jelly">The main subject gets cut out and turned to jelly.</span><span data-effect="googly" hidden>Every face gets a pair of googly eyes.</span><span data-effect="both" hidden>The main subject turns to jelly, with googly eyes stuck on every face.</span> Everything runs on your device; the first visit downloads about 8&nbsp;MB.</p>
         </div>
       </section>
 
@@ -44,7 +45,7 @@
       <p id="hint" class="hint" hidden>Drag it, shake the window, or shake your phone</p>
 
       <form id="settings" class="settings" hidden>
-        <div data-effect="jelly" class="group">
+        <div data-effect="jelly both" class="group">
           <fieldset class="mode">
             <legend>Wobbliest part</legend>
             <label class="check"><input name="mode" type="radio" value="height" checked /> Top of the subject</label>
@@ -54,13 +55,14 @@
           <label>Wobbliness <input name="wobble" type="range" min="0" max="1" step="0.01" value="0.4" /></label>
           <label>Damping <input name="damping" type="range" min="0" max="1" step="0.01" value="0.35" /></label>
         </div>
-        <div data-effect="googly" class="group" hidden>
+        <div data-effect="googly both" class="group" hidden>
           <label>Eye size <input name="eyeSize" type="range" min="0.5" max="1.6" step="0.01" value="1" /></label>
           <label class="check"><input name="eyeOverlap" type="checkbox" /> Let eyes overlap</label>
-          <button id="reset-eyes" class="btn" type="button">Reset eye positions</button>
+          <button id="reset-eyes" class="btn" type="button">Reset eyes</button>
         </div>
         <label>Shake sensitivity <input name="sensitivity" type="range" min="0" max="2" step="0.01" value="1" /></label>
-        <label data-effect="jelly" class="check"><input name="hideJelly" type="checkbox" /> Hide jelly (show filled background)</label>
+        <label data-effect="jelly both" class="check"><input name="hideJelly" type="checkbox" /> Hide jelly (show filled background)</label>
+        <label class="check"><input name="sound" type="checkbox" /> Sound effects</label>
       </form>
     </main>
 

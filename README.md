@@ -5,7 +5,12 @@ Drag it with the mouse or a finger, shake the browser window, or shake your phon
 
 Or switch to **Googly eyes** (the toggle in the header): every face in the
 photo gets a pair of googly eyes whose pupils rattle around when you shake the
-window or the phone, or drag the eyes.
+window or the phone, or drag the eyes. Tap to add an eye, double-tap one to
+remove it. **Both** sticks the googly eyes onto the jelly, so they rattle as
+it wobbles.
+
+Sound effects (a boing for the jelly, a plastic tick for the pupils) are
+synthesised with Web Audio and are off until switched on in Settings.
 
 ## Running
 
@@ -64,16 +69,28 @@ from inside a tap, so the first tap on the photo shows its permission prompt.
 
 1. **Face detection** (`src/faces.js`): [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
    (OpenCV Zoo, MIT, 230 KB), downloaded when the mode is first chosen. It
-   gives each face's eye landmarks; each eye is centred on one, sized to
-   0.45× the gap between them. Up to 40 faces get eyes.
+   is trained on mostly upright faces, and on tilted ones its landmarks drift
+   back towards level, so it runs on the photo rotated in 30° steps (12
+   passes, about 25 ms each) and keeps each face from the pass that scored
+   it highest, where it was nearest upright. That gives each face's eye
+   landmarks at any orientation, upside down included; each eye is centred on one, sized to
+   0.45× the gap between them, or to the face's width when the head is
+   turned and the eyes look close together. They're spread apart along the
+   line between the eyes, so they follow the head's tilt. Up to 40 faces get
+   eyes.
 2. **No faces**: a pair goes near the top of the main subject found by U²-Netp,
-   or in the middle of the photo. Eyes can be dragged anywhere.
+   or in the middle of the photo. Eyes can be dragged anywhere, added with a
+   tap and removed with a double-tap; "Reset eyes" undoes all of that.
 3. **Physics** (`src/googly.js`): each pupil is a disc loose inside its eye,
    simulated in the eye's frame. It falls under gravity, and the eye's own
    acceleration (from window moves, drags, or device motion) pushes it the
    other way. It bounces off the rim and rolls to a stop. Accelerations are
    scaled as if every eye were 5 cm across, so big and small eyes behave alike.
 4. **Rendering**: a 2D canvas laid over the WebGL photo.
+5. **Both**: each eye is tied to the jelly-mesh triangle under it at rest
+   (or the nearest one, if it's just outside), and follows that triangle as
+   the jelly deforms. The pupils feel the jelly's movement as well as the
+   window's and the phone's. Eyes off the jelly stay put with the background.
 
 ## Known limitations
 

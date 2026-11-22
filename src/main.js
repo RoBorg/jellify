@@ -7,11 +7,14 @@ import { Renderer } from './renderer.js';
 import { attachPointer, WindowTracker, MotionTracker } from './input.js';
 import { loadFaceDetector, detectFaces } from './faces.js';
 import { Googly, placeEyes } from './googly.js';
+import { Sound } from './sound.js';
 
 const MAX_SIDE = 1024; // working resolution, px on the long side
 const MAX_FACES = 40;
 const MOTION_GAIN = 0.6; // px/s² of jelly push per m/s² of device acceleration, per px of image diagonal
 const MOTION_DEADZONE = 0.25; // m/s², ignores sensor noise while the phone is still
+const DOUBLE_TAP = 400; // ms
+const EFFECTS = ['jelly', 'googly', 'both'];
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -26,7 +29,7 @@ const legendEl = $('depth-legend');
 legendEl.querySelector('.legend-bar').style.background = INFERNO_CSS;
 
 const settings = {
-  effect: 'jelly', // or 'googly'
+  effect: 'jelly', // 'jelly', 'googly' (eyes only) or 'both' (eyes stuck to the jelly)
   wobble: 0.4,
   damping: 0.35,
   sensitivity: 1,
@@ -38,6 +41,9 @@ const settings = {
 };
 const windowTracker = new WindowTracker();
 const motion = new MotionTracker();
+const sound = new Sound();
+const hasJelly = () => settings.effect !== 'googly';
+const hasEyes = () => settings.effect !== 'jelly';
 
 let renderer = null;
 let photo = null; // the current photo, and what's been worked out from it so far
@@ -140,8 +146,8 @@ async function applyEffect() {
   googly = null;
   hintEl.hidden = true;
   canvas.hidden = false;
-  canvas.classList.toggle('googly', settings.effect === 'googly');
-  eyesCanvas.hidden = settings.effect !== 'googly';
+  canvas.style.cursor = '';
+  eyesCanvas.hidden = !hasEyes();
   eyesCtx.clearRect(0, 0, eyesCanvas.width, eyesCanvas.height);
   renderer.setBackground(current.canvas, current.w, current.h);
   renderer.setJelly(null);
@@ -150,8 +156,15 @@ async function applyEffect() {
   needsDraw = true;
 
   try {
-    const hint = settings.effect === 'googly' ? await showEyes(current, stale) : await showJelly(current, stale);
+    if (hasJelly()) await showJelly(current, stale);
     if (stale()) return;
+    const note = hasEyes() ? await showEyes(current, stale) : '';
+    if (stale()) return;
+    const hint = {
+      jelly: `Drag it, or ${shakeHint()}`,
+      googly: `${note}Drag the eyes, tap to add one, double-tap to remove`,
+      both: `${note}Drag the jelly or the eyes, tap to add eyes, or ${shakeHint()}`,
+    }[settings.effect];
     setStatus('');
     settingsBtn.hidden = false;
     $('new-btn').textContent = 'New photo';
@@ -232,12 +245,12 @@ async function showJelly(current, stale) {
   // A little boing so it's obvious what happened.
   const size = js.mesh.bounds.y1 - js.mesh.bounds.y0;
   jelly.kick(size * 0.6, size * 1.2);
+  sound.boing(0.5);
   if (settings.mode === 'depth') applyMode();
-  return `Drag it, or ${shakeHint()}`;
 }
 
+/** Sets up the googly eyes; returns a note for the hint, if any. */
 async function showEyes(current, stale) {
-  let note = '';
   if (!current.eyes) {
     setStatus('Loading the face finder…');
     await loadFaceDetector().catch(() => {
@@ -252,13 +265,20 @@ async function showEyes(current, stale) {
       const map = await findSubject(current);
       if (stale()) return;
       if (map) subject = { map, size: SEG_SIZE };
-      note = 'No faces found, so they went on top. ';
     }
-    current.eyes = placeEyes(faces, subject, current.w, current.h);
+    current.eyesHome = placeEyes(faces, subject, current.w, current.h);
+    current.eyes = current.eyesHome.map((e) => ({ ...e }));
+    current.eyesNote = faces.length ? '' : 'No faces found, so they went on top. ';
   }
-  googly = new Googly(current.eyes, current.w, current.h);
+  googly = new Googly(current.eyes, current.eyesHome, current.w, current.h);
   googly.setParams(settings);
-  return `${note}Drag the eyes, or ${shakeHint()}`;
+  if (jelly) googly.setSurface(jelly.surface());
+  googly.onHit = (speed, radius) => {
+    // Small eyes tick higher.
+    const pitch = Math.min(2, Math.max(0.6, Math.sqrt(40 / Math.max(1, radius * renderer.fit.scale))));
+    sound.tick(speed / 0.8, pitch);
+  };
+  return current.eyesNote;
 }
 
 /**
@@ -364,65 +384,103 @@ function frame(now) {
 
   const [wx, wy] = windowTracker.poll();
   const [fx, fy] = motionForce();
-
-  if (googly) {
-    // The eyes move with the window; their pupils' inertia leaves them behind.
-    const k = settings.sensitivity / renderer.fit.scale;
-    if (wx || wy || fx || fy) wake();
+  if (!jelly && !googly) {
     if (needsDraw) renderer.draw(null, null);
-    if (awake || needsDraw) {
-      googly.step(dt, fx, fy, wx * k, wy * k);
-      drawEyes();
-      if (googly.isAtRest()) awake = false;
+    needsDraw = false;
+    return;
+  }
+
+  // The photo moves with the window, and whatever's loose on it (the jelly,
+  // the pupils) is left behind by its inertia.
+  const k = settings.sensitivity / renderer.fit.scale;
+  if (wx || wy || fx || fy) wake();
+  let ax = 0;
+  let ay = 0;
+  if (jelly) {
+    if (wx || wy) {
+      const max = imageDiag * 0.2;
+      const clamp = (v) => Math.max(-max, Math.min(max, v));
+      const jx = clamp(-wx * k);
+      const jy = clamp(-wy * k);
+      jelly.jolt(jx, jy);
+      const jolt = Math.hypot(jx, jy) / imageDiag;
+      if (jolt > 0.015) sound.boing(jolt * 8);
     }
-    needsDraw = false;
-    return;
+    ax = fx * MOTION_GAIN * imageDiag;
+    ay = fy * MOTION_GAIN * imageDiag;
+    const shake = Math.hypot(fx, fy);
+    if (shake > 3) sound.boing(shake / 15);
   }
-
-  if (!jelly) {
-    if (needsDraw) renderer.draw(null, null);
-    needsDraw = false;
-    return;
-  }
-
-  // The photo moves with the window; the jelly's inertia leaves it behind.
-  if (wx || wy) {
-    const k = settings.sensitivity / renderer.fit.scale;
-    const max = imageDiag * 0.2;
-    const clamp = (v) => Math.max(-max, Math.min(max, v));
-    jelly.jolt(clamp(-wx * k), clamp(-wy * k));
-    wake();
-  }
-
-  const ax = fx * MOTION_GAIN * imageDiag;
-  const ay = fy * MOTION_GAIN * imageDiag;
-  if (ax || ay) wake();
 
   if (!awake && !needsDraw) return;
-  jelly.step(dt, ax, ay);
-  renderer.draw(jelly.pos, jelly.strain);
+  if (jelly) {
+    jelly.step(dt, ax, ay);
+    renderer.draw(jelly.pos, jelly.strain);
+  } else if (needsDraw) {
+    renderer.draw(null, null);
+  }
+  if (googly) {
+    googly.step(dt, fx, fy, wx * k, wy * k);
+    drawEyes();
+  }
   needsDraw = false;
-  if (jelly.isAtRest()) awake = false;
+  if ((!jelly || jelly.isAtRest()) && (!googly || googly.isAtRest())) awake = false;
 }
 requestAnimationFrame(frame);
 
+const grabbed = new Map(); // pointer id → what it's holding
+let lastTap = null; // { eye, time }, for double-tap to remove
+
 attachPointer(canvas, {
   toImage: (x, y) => renderer.toImage(x, y),
+  // Eyes sit on top of the jelly, so they get first pick.
   grab: (id, x, y) => {
-    const target = googly ?? jelly;
+    const target = [googly, jelly].find((t) => t?.grab(id, x, y));
     if (!target) return false;
+    grabbed.set(id, target);
     wake();
-    return target.grab(id, x, y);
+    return true;
   },
   move: (id, x, y) => {
-    (googly ?? jelly)?.moveGrab(id, x, y);
+    grabbed.get(id)?.moveGrab(id, x, y);
     wake();
   },
   release: (id) => {
-    jelly?.release(id);
-    googly?.release(id);
+    const target = grabbed.get(id);
+    grabbed.delete(id);
+    if (!target) return;
+    const dragged = target.release(id);
+    if (target === jelly && dragged) {
+      const size = jelly.mesh.bounds.y1 - jelly.mesh.bounds.y0;
+      sound.boing(dragged / size);
+    }
   },
+  tap: (x, y) => {
+    if (!googly) return;
+    const eye = googly.eyeAt(x, y);
+    const now = performance.now();
+    if (eye) {
+      if (lastTap && lastTap.eye === eye && now - lastTap.time < DOUBLE_TAP) {
+        googly.removeEye(eye);
+        lastTap = null;
+      } else {
+        lastTap = { eye, time: now };
+      }
+    } else {
+      googly.addEye(x, y);
+      lastTap = null;
+    }
+    wake();
+    updateCursor(x, y);
+  },
+  hover: (x, y) => updateCursor(x, y),
 });
+
+/** Show what a click would do: grab an eye or the jelly, or add an eye. */
+function updateCursor(x, y) {
+  if (googly?.eyeAt(x, y) || jelly?.hits(x, y)) canvas.style.cursor = 'grab';
+  else canvas.style.cursor = googly ? 'copy' : 'default';
+}
 
 new ResizeObserver(() => {
   renderer?.resize();
@@ -508,6 +566,7 @@ settingsForm.addEventListener('input', () => {
   settings.showDepth = f.showDepth.checked;
   settings.eyeSize = Number(f.eyeSize.value);
   settings.eyeOverlap = f.eyeOverlap.checked;
+  if (f.sound.checked !== sound.enabled) sound.setEnabled(f.sound.checked);
   const mode = f.mode.value;
   f.showDepth.disabled = mode !== 'depth';
   jelly?.setParams(settings);
@@ -535,9 +594,11 @@ const effectInputs = document.querySelectorAll('input[name="effect"]');
 function setEffect(effect) {
   settings.effect = effect;
   for (const input of effectInputs) input.checked = input.value === effect;
-  for (const el of document.querySelectorAll('[data-effect]')) el.hidden = el.dataset.effect !== effect;
-  $('brand-mark').textContent = effect === 'googly' ? '👀' : '🍮';
-  if (effect === 'googly') loadFaceDetector().catch(() => {});
+  for (const el of document.querySelectorAll('[data-effect]')) {
+    el.hidden = !el.dataset.effect.split(' ').includes(effect);
+  }
+  $('brand-mark').textContent = effect === 'jelly' ? '🍮' : '👀';
+  if (effect !== 'jelly') loadFaceDetector().catch(() => {});
   try {
     localStorage.setItem(EFFECT_KEY, effect);
   } catch {
@@ -555,7 +616,7 @@ for (const input of effectInputs) {
 
 try {
   const saved = localStorage.getItem(EFFECT_KEY);
-  if (saved === 'googly' || saved === 'jelly') setEffect(saved);
+  if (EFFECTS.includes(saved)) setEffect(saved);
 } catch {
   // Storage blocked; start with jelly.
 }

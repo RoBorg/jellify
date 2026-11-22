@@ -194,13 +194,18 @@ export class Jelly {
     this.drag = 2 * (0.05 + 0.6 * damping) * omega(1);
   }
 
+  /** Whether (x, y) is on or right next to the jelly. */
+  hits(x, y) {
+    const reach = this.mesh.spacing * 2;
+    for (let i = 0; i < this.count; i++) {
+      if (Math.hypot(this.pos[i * 2] - x, this.pos[i * 2 + 1] - y) <= reach) return true;
+    }
+    return false;
+  }
+
   grab(id, x, y) {
     const { spacing, bounds } = this.mesh;
-    let bestD = Infinity;
-    for (let i = 0; i < this.count; i++) {
-      bestD = Math.min(bestD, Math.hypot(this.pos[i * 2] - x, this.pos[i * 2 + 1] - y));
-    }
-    if (bestD > spacing * 2) return false;
+    if (!this.hits(x, y)) return false;
 
     // Hold a wide, soft-edged patch so the pull spreads smoothly instead of
     // creasing the mesh around a single point.
@@ -212,7 +217,7 @@ export class Jelly {
       const w = Math.exp(-(dx * dx + dy * dy) / (sigma * sigma));
       if (w > 0.02) verts.push({ i, dx, dy, w });
     }
-    this.grabs.set(id, { x, y, verts });
+    this.grabs.set(id, { x, y, x0: x, y0: y, verts });
     return true;
   }
 
@@ -224,8 +229,55 @@ export class Jelly {
     }
   }
 
+  /** Let go; returns how far that grab was dragged, px (0 if it wasn't one). */
   release(id) {
+    const g = this.grabs.get(id);
     this.grabs.delete(id);
+    return g ? Math.hypot(g.x - g.x0, g.y - g.y0) : 0;
+  }
+
+  /**
+   * A Surface (see googly.js) for sticking things to the jelly. A point is
+   * tied to the mesh triangle it lies in at rest, or the nearest one if it's
+   * just outside, and follows that triangle's movement. Points further away
+   * aren't on the jelly and stay where they are.
+   */
+  surface() {
+    const { tris, rest, pos } = this;
+    // The triangle that (x, y) is in, or nearly in, with barycentric weights.
+    const locate = (p, x, y) => {
+      let best = null;
+      let bestMin = -0.75; // up to about a triangle's width outside the mesh
+      for (let t = 0; t < tris.length; t += 3) {
+        const a = tris[t] * 2;
+        const b = tris[t + 1] * 2;
+        const c = tris[t + 2] * 2;
+        const det = (p[b + 1] - p[c + 1]) * (p[a] - p[c]) + (p[c] - p[b]) * (p[a + 1] - p[c + 1]);
+        if (Math.abs(det) < 1e-9) continue;
+        const u = ((p[b + 1] - p[c + 1]) * (x - p[c]) + (p[c] - p[b]) * (y - p[c + 1])) / det;
+        const v = ((p[c + 1] - p[a + 1]) * (x - p[c]) + (p[a] - p[c]) * (y - p[c + 1])) / det;
+        const w = 1 - u - v;
+        const m = Math.min(u, v, w);
+        if (m > bestMin) {
+          bestMin = m;
+          best = { a, b, c, u, v, w };
+          if (m >= 0) break;
+        }
+      }
+      return best;
+    };
+    const apply = (p, { a, b, c, u, v, w }) => [
+      u * p[a] + v * p[b] + w * p[c],
+      u * p[a + 1] + v * p[b + 1] + w * p[c + 1],
+    ];
+    return {
+      bind: (x, y) => locate(rest, x, y),
+      place: (binding) => apply(pos, binding),
+      toRest: (x, y) => {
+        const hit = locate(pos, x, y);
+        return hit ? apply(rest, hit) : [x, y];
+      },
+    };
   }
 
   /** Teleport the body relative to its anchors, e.g. when the window jumps. */

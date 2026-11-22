@@ -173,11 +173,7 @@ body {
 }
 
 .view.grabbing {
-  cursor: grabbing;
-}
-
-.view.googly:not(.grabbing) {
-  cursor: default;
+  cursor: grabbing !important; /* over the hover cursor, set inline */
 }
 
 .overlay {
@@ -268,7 +264,11 @@ body.dragging .drop {
 }
 
 .hint {
-  animation: fade-out 0.6s ease 4s forwards;
+  width: max-content;
+  white-space: normal;
+  text-align: center;
+  border-radius: 16px;
+  animation: fade-out 0.6s ease 5s forwards;
 }
 
 @keyframes fade-out {

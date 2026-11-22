@@ -1,13 +1,22 @@
 // Input sources that make the jelly wobble: pointer drags (mouse/touch/pen),
 // the browser window being dragged around the desktop, and device motion.
 
-/** Grab and drag the jelly with any number of pointers. */
-export function attachPointer(canvas, { toImage, grab, move, release }) {
+const TAP_TIME = 300; // ms
+const TAP_SLOP = 10; // CSS px
+
+/**
+ * Grab and drag things with any number of pointers. Also reports taps (a
+ * quick press and release without moving, whether or not it grabbed
+ * anything) and, for a mouse, where it hovers.
+ */
+export function attachPointer(canvas, { toImage, grab, move, release, tap, hover }) {
+  const presses = new Map();
   const local = (e) => {
     const r = canvas.getBoundingClientRect();
     return toImage(e.clientX - r.left, e.clientY - r.top);
   };
   canvas.addEventListener('pointerdown', (e) => {
+    presses.set(e.pointerId, { x: e.clientX, y: e.clientY, t: e.timeStamp, still: true });
     const [x, y] = local(e);
     if (grab(e.pointerId, x, y)) {
       canvas.setPointerCapture(e.pointerId);
@@ -16,12 +25,19 @@ export function attachPointer(canvas, { toImage, grab, move, release }) {
     }
   });
   canvas.addEventListener('pointermove', (e) => {
+    const press = presses.get(e.pointerId);
+    if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > TAP_SLOP) press.still = false;
     if (canvas.hasPointerCapture(e.pointerId)) move(e.pointerId, ...local(e));
+    else if (!press && e.pointerType === 'mouse') hover?.(...local(e));
   });
   const end = (e) => {
+    const press = presses.get(e.pointerId);
+    presses.delete(e.pointerId);
     release(e.pointerId);
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
     canvas.classList.remove('grabbing');
+    if (e.type === 'pointerup' && press?.still && e.timeStamp - press.t < TAP_TIME) tap?.(...local(e));
+    if (e.pointerType === 'mouse') hover?.(...local(e));
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
